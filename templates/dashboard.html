@@ -1,0 +1,590 @@
+{% extends "base.html" %}
+
+{% block title %}MediaMTX Monitor - Monitoring Dashboard{% endblock %}
+
+{% block head_extra %}
+<style>
+    .dashboard-container {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    .dashboard-section {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        border: 1px solid #dee2e6;
+    }
+    .dashboard-section h3 {
+        margin-top: 0;
+        color: #495057;
+        border-bottom: 2px solid #007bff;
+        padding-bottom: 10px;
+    }
+    .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .status-active { background: #28a745; }
+    .status-inactive { background: #dc3545; }
+    .status-warning { background: #ffc107; }
+
+    .connection-list {
+        max-height: 400px;
+        overflow-y: auto;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        background: white;
+    }
+    .connection-item {
+        padding: 12px;
+        border-bottom: 1px solid #eee;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .connection-item:last-child { border-bottom: none; }
+    .connection-info { flex: 1; }
+    .connection-id { font-weight: bold; color: #495057; }
+    .connection-path { color: #6c757d; font-size: 14px; }
+    .connection-stats { font-size: 12px; color: #6c757d; margin-top: 4px; }
+    .connection-actions { display: flex; gap: 8px; }
+    .no-connections {
+        text-align: center;
+        color: #6c757d;
+        padding: 40px;
+        background: white;
+        border-radius: 4px;
+    }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+    .stat-card {
+        background: white;
+        padding: 15px;
+        border-radius: 6px;
+        border: 1px solid #dee2e6;
+        text-align: center;
+    }
+    .stat-number { font-size: 24px; font-weight: bold; color: #495057; }
+    .stat-label { font-size: 12px; color: #6c757d; text-transform: uppercase; margin-top: 5px; }
+    .refresh-info {
+        text-align: center;
+        color: #6c757d;
+        font-size: 12px;
+        margin-top: 20px;
+    }
+    .controls-section {
+        background: #e9ecef;
+        padding: 15px;
+        border-radius: 4px;
+        margin-bottom: 20px;
+        text-align: center;
+    }
+    .log-entry {
+        padding: 8px 12px;
+        border-bottom: 1px solid #f1f3f4;
+        font-size: 12px;
+        font-family: 'Courier New', monospace;
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-entry.DEBUG { background: #f8f9fa; color: #6c757d; }
+    .log-entry.INFO { background: #d1ecf1; color: #0c5460; }
+    .log-entry.WARNING { background: #fff3cd; color: #856404; }
+    .log-entry.ERROR { background: #f8d7da; color: #721c24; }
+    .log-timestamp { color: #6c757d; font-weight: bold; margin-right: 8px; }
+    .log-level {
+        display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold; margin-right: 8px; min-width: 50px; text-align: center;
+    }
+    .log-level.DEBUG { background: #6c757d; color: white; }
+    .log-level.INFO { background: #17a2b8; color: white; }
+    .log-level.WARNING { background: #ffc107; color: #212529; }
+    .log-level.ERROR { background: #dc3545; color: white; }
+
+    .trigger-entry { padding: 10px 12px; border-bottom: 1px solid #f1f3f4; font-size: 12px; }
+    .trigger-entry:last-child { border-bottom: none; }
+    .trigger-timestamp { color: #6c757d; font-weight: bold; font-size: 11px; }
+    .trigger-type {
+        display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold; margin: 4px 4px 4px 0; text-transform: uppercase;
+    }
+    .trigger-type.packet_loss { background: #dc3545; color: white; }
+    .trigger-type.rtt { background: #fd7e14; color: white; }
+    .trigger-type.bandwidth { background: #6610f2; color: white; }
+    .trigger-type.buffer_size { background: #e83e8c; color: white; }
+    .trigger-type.restart_triggered { background: #ffc107; color: #212529; }
+    .trigger-type.restart_completed { background: #28a745; color: white; }
+    .trigger-type.restart_failed { background: #dc3545; color: white; }
+    .trigger-type.connection_recovered { background: #20c997; color: white; }
+    .trigger-type.bulk_restart { background: #6f42c1; color: white; }
+    .trigger-connection { font-weight: bold; color: #495057; }
+    .trigger-details { color: #6c757d; margin-top: 4px; font-size: 11px; }
+
+    @media (max-width: 768px) {
+        .dashboard-grid { grid-template-columns: 1fr; }
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+</style>
+<script>
+    let refreshInterval = {{ refresh_interval_ms }};
+    let refreshTimer;
+
+    // These utility functions are exposed via Flask's Jinja2 globals
+    // formatBytes, formatDuration, getHealthStatus
+    // Ensure they are truly available in the client-side scope if used.
+    // Otherwise, they need to be defined in this script or fetched.
+
+    async function updateMonitoringStatus() {
+        try {
+            const response = await fetch('/api/monitoring_status');
+            const status = await response.json();
+            
+            const indicator = document.getElementById('status-indicator');
+            const text = document.getElementById('status-text');
+            const details = document.getElementById('status-details');
+            
+            if (status.active) {
+                indicator.className = 'status-indicator status-active';
+                text.textContent = 'Monitoring Active';
+                details.textContent = `Checking every ${status.interval} seconds. Auto-restart: ${status.auto_restart_enabled ? 'Enabled' : 'Disabled'}`;
+            } else {
+                indicator.className = 'status-indicator status-inactive';
+                text.textContent = 'Monitoring Inactive';
+                details.textContent = 'Monitoring is not running';
+            }
+        } catch (error) {
+            console.error('Error updating monitoring status:', error);
+        }
+    }
+    
+    async function updateConnectionHistory() {
+        try {
+            const historyResponse = await fetch('/api/connection_history');
+            const history = await historyResponse.json();
+            
+            const totalConnections = Object.keys(history).length;
+            const problemConnections = Object.values(history).filter(conn => conn.failure_count > 0).length;
+            
+            document.getElementById('total-connections').textContent = totalConnections;
+            document.getElementById('problem-connections').textContent = problemConnections;
+        } catch (error) {
+            console.error('Error updating connection history:', error);
+            document.getElementById('total-connections').textContent = '?';
+            document.getElementById('problem-connections').textContent = '?';
+        }
+    }
+    
+    async function updateActiveStreamsCount() {
+        try {
+            const streamsResponse = await fetch('/api/active_streams_data');
+            const streams = await streamsResponse.json();
+            
+            document.getElementById('active-streams').textContent = Array.isArray(streams) ? streams.length : 0;
+        } catch (error) {
+            console.error('Error updating active streams:', error);
+            document.getElementById('active-streams').textContent = '?';
+        }
+    }
+    
+    async function updateConnections() {
+        try {
+            const srtResponse = await fetch('/api/srt_conns_readable_data');
+            const connections = await srtResponse.json();
+            
+            const historyResponse = await fetch('/api/connection_history');
+            const history = await historyResponse.json();
+
+            const settingsResponse = await fetch('/api/auto_restart_settings');
+            const settings = await settingsResponse.json();
+            
+            const container = document.getElementById('connections-container');
+            
+            if (connections.error || !Array.isArray(connections) || connections.length === 0) {
+                container.innerHTML = '<div class="no-connections">No SRT connections found</div>';
+                return;
+            }
+            
+            let html = '<div class="connection-list">';
+            connections.forEach(conn => {
+                const connHistory = history[conn.id] || { failure_count: 0, last_restart: null };
+                const health = getHealthStatus(conn, settings); // Use the utility function
+                const statusClass = health === 'critical' ? 'status-inactive' :
+                                   health === 'warning' ? 'status-warning' : 'status-active';
+                
+                html += `
+                    <div class="connection-item">
+                        <div class="connection-info">
+                            <div class="connection-id">
+                                <span class="status-indicator ${statusClass}"></span>
+                                ${conn.id} - ${conn.path}
+                            </div>
+                            <div class="connection-path">${conn.remoteAddr} | ${conn.state.toUpperCase()}</div>
+                            <div class="connection-stats">
+                                Loss: ${(conn.packetsReceivedLossRate * 100).toFixed(2)}% | 
+                                RTT: ${conn.msRTT}ms | 
+                                Recv: ${formatBytes(conn.bytesReceived)} | 
+                                Issues: ${connHistory.failure_count} |
+                                Duration: ${formatDuration(conn.created)}
+                            </div>
+                        </div>
+                        <div class="connection-actions">
+                            <button class="btn btn-sm btn-danger" onclick="restartConnection('${conn.id}')">
+                                Restart
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            
+            container.innerHTML = html;
+        } catch (error) {
+            console.error('Error updating connections:', error);
+            document.getElementById('connections-container').innerHTML = 
+                '<div class="no-connections">Error loading connections</div>';
+        }
+    }
+    
+    async function updateDebugLog() {
+        try {
+            const response = await fetch('/api/debug_log');
+            const logs = await response.json();
+            
+            const container = document.getElementById('debug-log-container');
+            
+            if (!Array.isArray(logs) || logs.length === 0) {
+                container.innerHTML = '<div style="padding: 20px; text-align: center; color: #6c757d;">No debug entries found</div>';
+                return;
+            }
+            
+            let html = '';
+            logs.slice(0, 20).forEach(log => {
+                html += `
+                    <div class="log-entry ${log.level}">
+                        <span class="log-timestamp">${log.timestamp}</span>
+                        <span class="log-level ${log.level}">${log.level}</span>
+                        <span class="log-message">${log.message}</span>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+            container.scrollTop = 0; // Auto-scroll to top for new entries
+        } catch (error) {
+            console.error('Error updating debug log:', error);
+            document.getElementById('debug-log-container').innerHTML = 
+                '<div style="padding: 20px; text-align: center; color: #dc3545;">Error loading debug log</div>';
+        }
+    }
+    
+    async function updateTriggerHistory() {
+        try {
+            const response = await fetch('/api/trigger_history');
+            const triggers = await response.json();
+            
+            const container = document.getElementById('trigger-history-container');
+            
+            if (!Array.isArray(triggers) || triggers.length === 0) {
+                container.innerHTML = '<div style="padding: 20px; text-align: center; color: #6c757d;">No trigger events found</div>';
+                return;
+            }
+            
+            let html = '';
+            triggers.slice(0, 15).forEach(trigger => {
+                html += `
+                    <div class="trigger-entry">
+                        <div class="trigger-timestamp">${trigger.timestamp}</div>
+                        <div>
+                            <span class="trigger-connection">${trigger.connection_id}</span>
+                            <span style="color: #6c757d;">(${trigger.path})</span>
+                        </div>
+                        <div>
+                            <span class="trigger-type ${trigger.trigger_type}">${trigger.trigger_type.replace('_', ' ')}</span>
+                        </div>
+                        <div class="trigger-details">
+                            ${getTriggerDetails(trigger)}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+            container.scrollTop = 0; // Auto-scroll to top for new entries
+        } catch (error) {
+            console.error('Error updating trigger history:', error);
+            document.getElementById('trigger-history-container').innerHTML = 
+                '<div style="padding: 20px; text-align: center; color: #dc3545;">Error loading trigger history</div>';
+        }
+    }
+    
+    function getTriggerDetails(trigger) {
+        switch (trigger.trigger_type) {
+            case 'packet_loss':
+                return `${trigger.value.toFixed(2)}% > ${trigger.threshold}% threshold`;
+            case 'rtt':
+                return `${trigger.value}ms > ${trigger.threshold}ms threshold`;
+            case 'bandwidth':
+                return `${trigger.value.toFixed(3)}Mbps < ${trigger.threshold}Mbps threshold`;
+            case 'buffer_size':
+                return `${formatBytes(trigger.value)} > ${formatBytes(trigger.threshold)} threshold`;
+            case 'restart_triggered':
+                return `After ${trigger.value} consecutive failures (threshold: ${trigger.threshold})`;
+            case 'restart_completed':
+                return 'Connection successfully restarted';
+            case 'restart_failed':
+                return 'Failed to restart connection';
+            case 'connection_recovered':
+                return 'Connection health improved, failure count reset';
+            case 'bulk_restart':
+                return `Bulk restart: ${trigger.action}`;
+            default:
+                return `${trigger.action}`;
+        }
+    }
+    
+    async function restartConnection(connectionId) {
+        if (!confirm(`Are you sure you want to restart connection ${connectionId}?`)) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/test_restart/${connectionId}`, { method: 'POST' });
+            const result = await response.json();
+            
+            if (response.ok) {
+                showAlert(`Connection ${connectionId} restarted successfully!`, 'success');
+                refreshData();
+            } else {
+                showAlert(`Failed to restart connection ${connectionId}: ${result.error}`, 'danger');
+            }
+        } catch (error) {
+            showAlert(`Error restarting connection ${connectionId}: ${error.message}`, 'danger');
+        }
+    }
+    
+    async function restartAllProblematic() {
+        if (!confirm('Are you sure you want to restart all connections with issues?')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/restart_all_problematic', { method: 'POST' });
+            const result = await response.json();
+            
+            if (response.ok) {
+                showAlert(result.message, result.failed === 0 ? 'success' : 'warning');
+                refreshData();
+            } else {
+                showAlert(`Failed to restart all problematic connections: ${result.error}`, 'danger');
+            }
+        } catch (error) {
+            showAlert(`Error restarting all connections: ${error.message}`, 'danger');
+        }
+    }
+    
+    async function clearHistory() {
+        if (!confirm('Are you sure you want to clear the connection history? This will reset all failure counters.')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/clear_history', { method: 'POST' });
+            if (response.ok) {
+                showAlert('Connection history cleared successfully!', 'success');
+                refreshData();
+            } else {
+                showAlert('Failed to clear history', 'danger');
+            }
+        } catch (error) {
+            showAlert(`Error clearing history: ${error.message}`, 'danger');
+        }
+    }
+    
+    function refreshData() {
+        updateMonitoringStatus();
+        updateConnectionHistory();
+        updateActiveStreamsCount();
+        updateConnections();
+        updateDebugLog();
+        updateTriggerHistory();
+    }
+    
+    function startAutoRefresh() {
+        if (refreshTimer) {
+            clearInterval(refreshTimer);
+        }
+        refreshTimer = setInterval(refreshData, refreshInterval);
+    }
+    
+    function stopAutoRefresh() {
+        if (refreshTimer) {
+            clearInterval(refreshTimer);
+            refreshTimer = null;
+        }
+    }
+    
+    // Event listeners
+    document.getElementById('start-monitoring').addEventListener('click', async () => {
+        try {
+            const response = await fetch('/api/start_monitoring', { method: 'POST' });
+            if (response.ok) {
+                showAlert('Monitoring started!', 'success');
+                refreshData();
+            } else {
+                throw new Error('Failed to start monitoring');
+            }
+        } catch (error) {
+            showAlert('Error starting monitoring: ' + error.message, 'danger');
+        }
+    });
+    
+    document.getElementById('stop-monitoring').addEventListener('click', async () => {
+        try {
+            const response = await fetch('/api/stop_monitoring', { method: 'POST' });
+            if (response.ok) {
+                showAlert('Monitoring stopped!', 'success');
+                refreshData();
+            } else {
+                throw new Error('Failed to stop monitoring');
+            }
+        } catch (error) {
+            showAlert('Error stopping monitoring: ' + error.message, 'danger');
+        }
+    });
+    
+    document.getElementById('refresh-data').addEventListener('click', refreshData);
+    document.getElementById('restart-all-problematic').addEventListener('click', restartAllProblematic);
+    document.getElementById('clear-history').addEventListener('click', clearHistory);
+    
+    document.getElementById('clear-debug-log').addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to clear the debug log?')) {
+            return;
+        }
+        try {
+            const response = await fetch('/api/clear_debug_log', { method: 'POST' });
+            if (response.ok) {
+                showAlert('Debug log cleared successfully!', 'success');
+                updateDebugLog();
+            } else {
+                showAlert('Failed to clear debug log', 'danger');
+            }
+        } catch (error) {
+            showAlert(`Error clearing debug log: ${error.message}`, 'danger');
+        }
+    });
+    
+    document.getElementById('clear-trigger-history').addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to clear the trigger history?')) {
+            return;
+        }
+        try {
+            const response = await fetch('/api/clear_trigger_history', { method: 'POST' });
+            if (response.ok) {
+                showAlert('Trigger history cleared successfully!', 'success');
+                updateTriggerHistory();
+            } else {
+                showAlert('Failed to clear trigger history', 'danger');
+            }
+        } catch (error) {
+            showAlert(`Error clearing trigger history: ${error.message}`, 'danger');
+        }
+    });
+    
+    // Initialize
+    window.onload = () => {
+        refreshData();
+        startAutoRefresh();
+    };
+    
+    // Stop refresh when page is hidden
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            stopAutoRefresh();
+        } else {
+            startAutoRefresh();
+        }
+    });
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div class="controls-section">
+        <button class="btn btn-success" id="start-monitoring">Start Monitoring</button>
+        <button class="btn btn-danger" id="stop-monitoring">Stop Monitoring</button>
+        <button class="btn" id="refresh-data">Refresh Data</button>
+    </div>
+    
+    <div class="dashboard-grid">
+        <div class="dashboard-section">
+            <h3>Monitoring Status</h3>
+            <p><span class="status-indicator" id="status-indicator"></span><span id="status-text">Loading...</span></p>
+            <p id="status-details"></p>
+            
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number" id="total-connections">-</div>
+                    <div class="stat-label">Total Connections</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="problem-connections">-</div>
+                    <div class="stat-label">With Issues</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="active-streams">-</div>
+                    <div class="stat-label">Active Streams</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="dashboard-section">
+            <h3>Quick Actions</h3>
+            <div style="margin-bottom: 15px;">
+                <button class="btn btn-warning" id="restart-all-problematic">Restart All Problematic</button>
+                <button class="btn" id="clear-history">Clear Connection History</button>
+            </div>
+            <div>
+                <a href="/auto_restart_settings" class="btn">Settings</a>
+                <a href="/srt_conns_readable" class="btn">View SRT Details</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="dashboard-grid">
+        <div class="dashboard-section">
+            <h3>Debug Log <button class="btn btn-sm" id="clear-debug-log" style="float: right;">Clear</button></h3>
+            <div id="debug-log-container" style="max-height: 300px; overflow-y: auto; background: white; border: 1px solid #dee2e6; border-radius: 4px;">
+                <div style="padding: 20px; text-align: center; color: #6c757d;">Loading debug log...</div>
+            </div>
+        </div>
+        
+        <div class="dashboard-section">
+            <h3>Trigger History <button class="btn btn-sm" id="clear-trigger-history" style="float: right;">Clear</button></h3>
+            <div id="trigger-history-container" style="max-height: 300px; overflow-y: auto; background: white; border: 1px solid #dee2e6; border-radius: 4px;">
+                <div style="padding: 20px; text-align: center; color: #6c757d;">Loading trigger history...</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="dashboard-section">
+        <h3>SRT Connections</h3>
+        <div id="connections-container">
+            <div class="no-connections">Loading connections...</div>
+        </div>
+    </div>
+    
+    <div class="refresh-info">
+        Data refreshes automatically every {{ refresh_interval_ms // 1000 }} second{{ 's' if refresh_interval_ms != 1000 else '' }}
+    </div>
+</div>
+{% endblock %}

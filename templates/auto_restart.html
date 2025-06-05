@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block title %}MediaMTX Monitor - Auto-Restart Settings{% endblock %}
+
+{% block head_extra %}
+<style>
+    .settings-container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        border: 1px solid #dee2e6;
+    }
+    .form-group {
+        margin-bottom: 20px;
+    }
+    .form-group label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+        color: #495057;
+    }
+    .form-group input, .form-group select {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid #ced4da;
+        border-radius: 4px;
+        font-size: 14px;
+    }
+    .form-group input:focus, .form-group select:focus {
+        outline: none;
+        border-color: #007bff;
+        box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+    }
+    .form-group small {
+        display: block;
+        margin-top: 5px;
+        color: #6c757d;
+        font-size: 12px;
+    }
+    .checkbox-group {
+        display: flex;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+    .checkbox-group input[type="checkbox"] {
+        width: auto;
+        margin-right: 10px;
+    }
+    .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .status-active {
+        background: #28a745;
+    }
+    .status-inactive {
+        background: #dc3545;
+    }
+    .monitoring-status {
+        background: #e9ecef;
+        padding: 15px;
+        border-radius: 4px;
+        margin-bottom: 20px;
+    }
+    .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+    }
+    @media (max-width: 768px) {
+        .grid-2 {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+<script>
+    let refreshInterval = {{ refresh_interval_ms }}; // Global refresh interval
+
+    async function loadSettings() {
+        try {
+            const response = await fetch('/api/auto_restart_settings');
+            const settings = await response.json();
+            
+            for (const [key, value] of Object.entries(settings)) {
+                const element = document.getElementById(key);
+                if (element) {
+                    if (element.type === 'checkbox') {
+                        element.checked = value;
+                    } else {
+                        element.value = value;
+                    }
+                }
+            }
+            updateMonitoringStatus();
+        } catch (error) {
+            showAlert('Error loading settings: ' + error.message, 'danger');
+        }
+    }
+    
+    async function saveSettings() {
+        try {
+            const formData = new FormData(document.getElementById('settings-form'));
+            const settings = {};
+            
+            for (const [key, value] of formData.entries()) {
+                const element = document.getElementById(key);
+                if (element.type === 'checkbox') {
+                    settings[key] = element.checked;
+                } else if (element.type === 'number') {
+                    settings[key] = parseFloat(value);
+                } else {
+                    settings[key] = value;
+                }
+            }
+            
+            const response = await fetch('/api/auto_restart_settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(settings)
+            });
+            
+            if (response.ok) {
+                showAlert('Settings saved successfully!', 'success');
+                updateMonitoringStatus();
+            } else {
+                throw new Error('Failed to save settings');
+            }
+        } catch (error) {
+            showAlert('Error saving settings: ' + error.message, 'danger');
+        }
+    }
+    
+    async function updateMonitoringStatus() {
+        try {
+            const response = await fetch('/api/monitoring_status');
+            const status = await response.json();
+            
+            const indicator = document.getElementById('status-indicator');
+            const text = document.getElementById('status-text');
+            const details = document.getElementById('status-details');
+            const summary = document.getElementById('connection-summary');
+            
+            if (status.active) {
+                indicator.className = 'status-indicator status-active';
+                text.textContent = 'Monitoring Active';
+                details.textContent = `Checking every ${status.interval} seconds. Auto-restart: ${status.auto_restart_enabled ? 'Enabled' : 'Disabled'}`;
+            } else {
+                indicator.className = 'status-indicator status-inactive';
+                text.textContent = 'Monitoring Inactive';
+                details.textContent = 'Monitoring is not running';
+            }
+
+            try {
+                const historyResponse = await fetch('/api/connection_history');
+                const history = await historyResponse.json();
+                
+                const connCount = Object.keys(history).length;
+                const problemConnections = Object.values(history).filter(conn => conn.failure_count > 0).length;
+                
+                summary.innerHTML = `
+                    <small>Tracked connections: ${connCount} | With issues: ${problemConnections}</small>
+                `;
+            } catch (e) {
+                summary.innerHTML = '<small>Connection info unavailable</small>';
+            }
+        } catch (error) {
+            console.error('Error updating monitoring status:', error);
+        }
+    }
+    
+    document.getElementById('settings-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveSettings();
+    });
+    
+    document.getElementById('start-monitoring').addEventListener('click', async () => {
+        try {
+            const response = await fetch('/api/start_monitoring', { method: 'POST' });
+            if (response.ok) {
+                showAlert('Monitoring started!', 'success');
+                updateMonitoringStatus();
+            } else {
+                throw new Error('Failed to start monitoring');
+            }
+        } catch (error) {
+            showAlert('Error starting monitoring: ' + error.message, 'danger');
+        }
+    });
+    
+    document.getElementById('stop-monitoring').addEventListener('click', async () => {
+        try {
+            const response = await fetch('/api/stop_monitoring', { method: 'POST' });
+            if (response.ok) {
+                showAlert('Monitoring stopped!', 'success');
+                updateMonitoringStatus();
+            } else {
+                throw new Error('Failed to stop monitoring');
+            }
+        } catch (error) {
+            showAlert('Error stopping monitoring: ' + error.message, 'danger');
+        }
+    });
+    
+    setInterval(updateMonitoringStatus, refreshInterval);
+    window.onload = loadSettings;
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="settings-container">
+    <div class="monitoring-status">
+        <h3>Monitoring Status</h3>
+        <p><span class="status-indicator" id="status-indicator"></span><span id="status-text">Loading...</span></p>
+        <p id="status-details"></p>
+        <div id="connection-summary" style="margin-top: 10px;"></div>
+    </div>
+    
+    <form id="settings-form">
+        <div class="checkbox-group">
+            <input type="checkbox" id="auto_restart_enabled" name="auto_restart_enabled">
+            <label for="auto_restart_enabled">Enable Automatic Stream Restart</label>
+        </div>
+        
+        <div class="grid-2">
+            <div class="form-group">
+                <label for="packet_loss_threshold">Packet Loss Threshold (%)</label>
+                <input type="number" id="packet_loss_threshold" name="packet_loss_threshold" min="0" max="100" step="0.1">
+                <small>Restart streams when packet loss exceeds this percentage</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="consecutive_failures">Consecutive Failures</label>
+                <input type="number" id="consecutive_failures" name="consecutive_failures" min="1" max="10" step="1">
+                <small>Number of consecutive checks above threshold before restart</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="monitor_interval">Monitor Interval (seconds)</label>
+                <input type="number" id="monitor_interval" name="monitor_interval" min="10" max="300" step="5">
+                <small>How often to check stream health</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="restart_cooldown">Restart Cooldown (seconds)</label>
+                <input type="number" id="restart_cooldown" name="restart_cooldown" min="60" max="3600" step="30">
+                <small>Minimum time between restarts of the same stream</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="max_rtt_threshold">Max RTT Threshold (ms)</label>
+                <input type="number" id="max_rtt_threshold" name="max_rtt_threshold" min="100" max="5000" step="50">
+                <small>Restart when RTT exceeds this value</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="min_bandwidth_threshold">Min Bandwidth Threshold (Mbps)</label>
+                <input type="number" id="min_bandwidth_threshold" name="min_bandwidth_threshold" min="0.01" max="100" step="0.01">
+                <small>Restart when receive rate drops below this value</small>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label for="buffer_size_threshold">Max Buffer Size (bytes)</label>
+            <input type="number" id="buffer_size_threshold" name="buffer_size_threshold" min="1024" max="10485760" step="1024">
+            <small>Restart when receive buffer exceeds this size (1MB = 1048576 bytes)</small>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <button type="submit" class="btn">Save Settings</button>
+            <button type="button" class="btn btn-success" id="start-monitoring">Start Monitoring</button>
+            <button type="button" class="btn btn-danger" id="stop-monitoring">Stop Monitoring</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

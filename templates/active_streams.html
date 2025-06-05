@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}MediaMTX Monitor - Active Streams{% endblock %}
+
+{% block head_extra %}
+<style>
+    #output { margin-top: 20px; }
+    ul { list-style-type: none; padding-left: 0; }
+    li.stream-item { margin-bottom: 15px; background: #f9f9f9; padding: 10px; border-radius: 4px; border: 1px solid #eee; }
+    li.stream-item strong { color: #333; display: block; margin-bottom: 5px; }
+    li.stream-item ul { margin-top: 5px; padding-left: 20px; list-style-type: disc; }
+    li.stream-item ul li { margin-bottom: 5px; background: #fff; padding: 0px; border: none;}
+    .no-streams { color: #777; }
+</style>
+<script>
+    let refreshInterval = {{ refresh_interval_ms }};
+    async function loadActiveStreams() {
+        try {
+            let r = await fetch("/api/active_streams_data");
+            let json = await r.json();
+            const outputDiv = document.getElementById("output");
+            if (json.error) {
+                outputDiv.innerHTML = "<p class='no-streams'>Error fetching active streams: " + json.error + "</p>";
+                return;
+            }
+            if (json.length === 0) {
+                outputDiv.innerHTML = "<p class='no-streams'>No active streams found.</p>";
+                return;
+            }
+            let html = "<ul>";
+            json.forEach(stream => {
+                html += `<li class="stream-item">
+                            <strong>${stream.name}</strong>
+                            (Status: ${stream.ready ? 'Ready' : 'Not Ready'}, Readers: ${stream.readers_count}, Source: ${stream.source_type})
+                            <ul>`;
+                if (stream.playback_urls.hls) {
+                    html += `<li>HLS: <a href='${stream.playback_urls.hls}' target='_blank' rel='noopener noreferrer'>${stream.playback_urls.hls}</a></li>`;
+                }
+                if (stream.playback_urls.rtsp) {
+                    html += `<li>RTSP: <span>${stream.playback_urls.rtsp}</span> (Copy URL)</li>`;
+                }
+                if (stream.playback_urls.rtmp) {
+                    html += `<li>RTMP: <span>${stream.playback_urls.rtmp}</span> (Copy URL)</li>`;
+                }
+                if (stream.playback_urls.webrtc) {
+                     html += `<li>WebRTC: <a href='${stream.playback_urls.webrtc}' target='_blank' rel='noopener noreferrer'>${stream.playback_urls.webrtc}</a> (Direct link, may require compatible player)</li>`;
+                }
+                html += `   </ul>
+                         </li>`;
+            });
+            html += "</ul>";
+            outputDiv.innerHTML = html;
+        } catch (e) {
+            document.getElementById("output").innerHTML = "<p class='no-streams'>Error loading active streams: " + e.message + "</p>";
+        }
+    }
+    setInterval(loadActiveStreams, refreshInterval);
+    window.onload = loadActiveStreams;
+</script>
+{% endblock %}
+
+{% block content %}
+<div id="output">Loading active streams...</div>
+{% endblock %}

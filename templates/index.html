@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}MediaMTX Monitor - {{ section_title | capitalize }}{% endblock %}
+
+{% block head_extra %}
+<script>
+    let sectionKey = "{{ section_key }}";
+    let refreshInterval = {{ refresh_interval_ms }};
+    let apiEndpoint = "/api/data/" + sectionKey;
+
+    async function loadData() {
+        try {
+            let r = await fetch(apiEndpoint);
+            let json = await r.json();
+            document.getElementById("output").textContent = JSON.stringify(json, null, 2);
+        } catch (e) {
+            document.getElementById("output").textContent = "Error: " + e;
+        }
+    }
+    setInterval(loadData, refreshInterval);
+    window.onload = loadData;
+</script>
+{% endblock %}
+
+{% block content %}
+<pre id="output">Loading...</pre>
+{% endblock %}

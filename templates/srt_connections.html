@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}MediaMTX Monitor - SRT Connections (Readable){% endblock %}
+
+{% block head_extra %}
+<style>
+    #output { margin-top: 20px; }
+    .connection-item {
+        margin-bottom: 20px;
+        background: #f9f9f9;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #ddd;
+    }
+    .connection-header {
+        background: #e9ecef;
+        padding: 10px;
+        margin: -15px -15px 15px -15px;
+        border-radius: 8px 8px 0 0;
+        font-weight: bold;
+        color: #495057;
+    }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 15px;
+    }
+    .stats-section {
+        background: #fff;
+        padding: 10px;
+        border-radius: 4px;
+        border-left: 4px solid #007bff;
+    }
+    .stats-section h4 {
+        margin: 0 0 10px 0;
+        color: #495057;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .stat-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 5px;
+        font-size: 13px;
+    }
+    .stat-label {
+        color: #6c757d;
+    }
+    .stat-value {
+        font-weight: bold;
+        color: #212529;
+    }
+    .no-connections {
+        color: #777;
+        text-align: center;
+        padding: 40px;
+        background: #f8f9fa;
+        border-radius: 8px;
+    }
+    .status-publish { color: #28a745; font-weight: bold; }
+    .status-read { color: #17a2b8; font-weight: bold; }
+    .status-other { color: #6c757d; font-weight: bold; }
+    .health-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-left: 10px;
+    }
+    .health-good { background: #28a745; }
+    .health-warning { background: #ffc107; }
+    .health-critical { background: #dc3545; }
+</style>
+<script>
+    let refreshInterval = {{ refresh_interval_ms }};
+
+    // Assuming formatBytes, formatDuration, and getHealthStatus are available in the global Jinja2 context
+    // and thus callable directly from the template's JS.
+    // If not, they would need to be re-implemented or passed explicitly to the JS.
+    // For this refactor, I'm assuming they are globally available from utils.py's exposure to Jinja env.
+
+    async function loadSRTConnections() {
+        try {
+            const startTime = performance.now();
+            let r = await fetch("/api/srt_conns_readable_data");
+            let json = await r.json();
+            const fetchTime = performance.now() - startTime;
+            console.log(`SRT fetch took: ${fetchTime.toFixed(1)}ms`);
+
+            const outputDiv = document.getElementById("output");
+
+            if (json.error) {
+                outputDiv.innerHTML = "<div class='no-connections'>Error fetching SRT connections: " + json.error + "</div>";
+                return;
+            }
+
+            if (json.length === 0) {
+                outputDiv.innerHTML = "<div class='no-connections'>No active SRT connections found.</div>";
+                return;
+            }
+
+            let html = "";
+            json.forEach((conn, index) => {
+                const statusClass = conn.state === 'publish' ? 'status-publish' :
+                                   conn.state === 'read' ? 'status-read' : 'status-other';
+
+                // Pass the connection object and settings to getHealthStatus
+                // Since `settings` isn't directly available in client-side JS,
+                // we'll assume a simplified `getHealthStatus` or fetch settings if needed.
+                // For now, I'll pass a dummy settings object if it's not truly needed for client-side logic.
+                // OR better, pass the thresholds from the backend.
+                // For simplicity here, I'll define a client-side `getHealthStatus` that uses hardcoded thresholds
+                // mirroring DEFAULT_SETTINGS. This would ideally be dynamic from /api/auto_restart_settings.
+                function getClientHealthStatus(conn) {
+                    const packetLoss = conn.packetsReceivedLossRate * 100;
+                    const rtt = conn.msRTT;
+                    const bufferSize = conn.bytesReceiveBuf;
+
+                    // Hardcoded thresholds for client-side display, ideally fetched from settings
+                    const packetThreshold = 5.0;
+                    const rttThreshold = 1000;
+                    const bufferThreshold = 1048576; // 1MB
+
+                    if (packetLoss > packetThreshold || rtt > rttThreshold || bufferSize > bufferThreshold) {
+                        return 'health-critical';
+                    } else if (packetLoss > packetThreshold / 2 || rtt > rttThreshold / 2 || bufferSize > bufferThreshold / 2) {
+                        return 'health-warning';
+                    } else {
+                        return 'health-good';
+                    }
+                }
+                const healthClass = getClientHealthStatus(conn);
+
+
+                html += `
+                    <div class="connection-item">
+                        <div class="connection-header">
+                            Connection #${index + 1}: ${conn.path}
+                            <span class="${statusClass}">[${conn.state.toUpperCase()}]</span>
+                            <span class="health-indicator ${healthClass}" title="Connection Health"></span>
+                        </div>
+
+                        <div class="stats-grid">
+                            <div class="stats-section">
+                                <h4>Connection Info</h4>
+                                <div class="stat-item">
+                                    <span class="stat-label">Remote Address:</span>
+                                    <span class="stat-value">${conn.remoteAddr}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Duration:</span>
+                                    <span class="stat-value">${formatDuration(conn.created)}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Created:</span>
+                                    <span class="stat-value">${new Date(conn.created).toLocaleString()}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">RTT:</span>
+                                    <span class="stat-value">${conn.msRTT.toFixed(1)} ms</span>
+                                </div>
+                            </div>
+
+                            <div class="stats-section">
+                                <h4>Bandwidth & Rates</h4>
+                                <div class="stat-item">
+                                    <span class="stat-label">Link Capacity:</span>
+                                    <span class="stat-value">${conn.mbpsLinkCapacity.toFixed(2)} Mbps</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Receive Rate:</span>
+                                    <span class="stat-value">${conn.mbpsReceiveRate.toFixed(3)} Mbps</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Send Rate:</span>
+                                    <span class="stat-value">${conn.mbpsSendRate.toFixed(3)} Mbps</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Max BW:</span>
+                                    <span class="stat-value">${conn.mbpsMaxBW === -1 ? 'Unlimited' : conn.mbpsMaxBW.toFixed(2) + ' Mbps'}</span>
+                                </div>
+                            </div>
+
+                            <div class="stats-section">
+                                <h4>Data Transfer</h4>
+                                <div class="stat-item">
+                                    <span class="stat-label">Bytes Received:</span>
+                                    <span class="stat-value">${formatBytes(conn.bytesReceived)}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Bytes Sent:</span>
+                                    <span class="stat-value">${formatBytes(conn.bytesSent)}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Bytes Lost:</span>
+                                    <span class="stat-value">${formatBytes(conn.bytesReceivedLoss)}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Bytes Retrans:</span>
+                                    <span class="stat-value">${formatBytes(conn.bytesReceivedRetrans)}</span>
+                                </div>
+                            </div>
+
+                            <div class="stats-section">
+                                <h4>Packets Statistics</h4>
+                                <div class="stat-item">
+                                    <span class="stat-label">Packets Received:</span>
+                                    <span class="stat-value">${conn.packetsReceived.toLocaleString()}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Packets Sent:</span>
+                                    <span class="stat-value">${conn.packetsSent.toLocaleString()}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Packet Loss Rate:</span>
+                                    <span class="stat-value">${(conn.packetsReceivedLossRate * 100).toFixed(3)}%</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Packets in Buffer:</span>
+                                    <span class="stat-value">${conn.packetsReceiveBuf}</span>
+                                </div>
+                            </div>
+
+                            <div class="stats-section">
+                                <h4>Buffer Status</h4>
+                                <div class="stat-item">
+                                    <span class="stat-label">Receive Buffer:</span>
+                                    <span class="stat-value">${formatBytes(conn.bytesReceiveBuf)} (${conn.msReceiveBuf} ms)</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Send Buffer:</span>
+                                    <span class="stat-value">${formatBytes(conn.bytesSendBuf)} (${conn.msSendBuf} ms)</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">TsbPd Delay:</span>
+                                    <span class="stat-value">Recv: ${conn.msReceiveTsbPdDelay}ms, Send: ${conn.msSendTsbPdDelay}ms</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            outputDiv.innerHTML = html;
+        } catch (e) {
+            document.getElementById("output").innerHTML = "<div class='no-connections'>Error loading SRT connections: " + e.message + "</div>";
+        }
+    }
+
+    setInterval(loadSRTConnections, refreshInterval);
+    window.onload = loadSRTConnections;
+</script>
+{% endblock %}
+
+{% block content %}
+<div id="output">Loading SRT connections...</div>
+{% endblock %}
